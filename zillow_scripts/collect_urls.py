@@ -366,17 +366,202 @@ def collect_urls_from_page(context, page: Page, seen_urls: Set[str], output_csv:
     collected_urls = []
     
     try:
-        # Human-like scroll to load all cards
-        logger.info("Scrolling to load property cards...")
-        human_like_scroll(page, scroll_pause=1.5)
+        # Scroll to bottom multiple times to trigger all lazy loading
+        logger.info("Scrolling to bottom to load ALL property cards...")
+        
+        # Keep scrolling until no new cards appear
+        previous_card_count = 0
+        scroll_attempts = 0
+        max_scroll_attempts = 20  # Increase attempts for more thorough loading
+        no_change_count = 0  # Count how many times card count didn't change
+        
+        while scroll_attempts < max_scroll_attempts:
+            # First, check for "Load More" or "Show More" buttons and click them
+            load_more_selectors = [
+                'button:has-text("Load More")',
+                'button:has-text("Show More")',
+                'button:has-text("See More")',
+                '[data-test*="load-more"]',
+                '[data-testid*="load-more"]',
+                'button[aria-label*="Load More"]',
+                'button[aria-label*="Show More"]',
+            ]
+            
+            for selector in load_more_selectors:
+                try:
+                    load_more_btn = page.query_selector(selector)
+                    if load_more_btn and load_more_btn.is_visible():
+                        # Check if button is disabled
+                        is_disabled = (
+                            load_more_btn.get_attribute('disabled') is not None or
+                            load_more_btn.get_attribute('aria-disabled') == 'true' or
+                            'disabled' in (load_more_btn.get_attribute('class') or '').lower()
+                        )
+                        if not is_disabled:
+                            card_count_before = len(page.query_selector_all('[data-test="property-card"], [data-testid="property-card"]'))
+                            logger.info(f"  Found 'Load More' button, clicking... (cards before: {card_count_before})")
+                            load_more_btn.click()
+                            time.sleep(random.uniform(4.0, 5.5))  # Even longer wait for content to load
+                            # Scroll to bottom after clicking
+                            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                            time.sleep(random.uniform(3.0, 4.0))
+                            card_count_after = len(page.query_selector_all('[data-test="property-card"], [data-testid="property-card"]'))
+                            if card_count_after > card_count_before:
+                                logger.info(f"  ✅ Load More worked! Cards increased from {card_count_before} to {card_count_after}")
+                            break
+                except Exception:
+                    continue
+            
+            # Get current page dimensions
+            current_scroll = page.evaluate("window.pageYOffset || window.scrollY")
+            page_height = page.evaluate("document.body.scrollHeight")
+            viewport_height = page.viewport_size['height']
+            
+            # Scroll VERY slowly in small increments to trigger all lazy loading
+            scroll_position = current_scroll
+            scroll_step = 200  # Smaller steps for more thorough scrolling
+            max_scroll = page_height - viewport_height + 100  # Go slightly past bottom
+            
+            while scroll_position < max_scroll:
+                scroll_position += scroll_step
+                # Ensure we don't overshoot
+                if scroll_position > max_scroll:
+                    scroll_position = max_scroll
+                
+                page.evaluate(f"window.scrollTo(0, {scroll_position})")
+                time.sleep(random.uniform(1.2, 2.0))  # Longer pause between scrolls
+                
+                # Check if page height increased (new content loaded)
+                new_page_height = page.evaluate("document.body.scrollHeight")
+                if new_page_height > page_height:
+                    logger.info(f"  Page height increased: {page_height} -> {new_page_height}, continuing scroll...")
+                    page_height = new_page_height
+                    max_scroll = page_height - viewport_height + 100
+            
+            # Force scroll to absolute bottom multiple times
+            for _ in range(3):
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                time.sleep(random.uniform(2.5, 3.5))
+                
+                # Check if page height increased
+                new_page_height = page.evaluate("document.body.scrollHeight")
+                if new_page_height > page_height:
+                    page_height = new_page_height
+                    logger.info(f"  Page height increased to {page_height}, scrolling again...")
+            
+            # Check current card count
+            current_cards = page.query_selector_all('[data-test="property-card"], [data-testid="property-card"]')
+            current_card_count = len(current_cards)
+            
+            logger.info(f"  Scroll attempt {scroll_attempts + 1}: Found {current_card_count} cards (page height: {page_height})")
+            
+            # If no new cards appeared, increment no_change_count
+            if current_card_count == previous_card_count:
+                no_change_count += 1
+                # Only stop if we've had 5 consecutive attempts with no change (more conservative)
+                if no_change_count >= 5 and current_card_count > 0:
+                    logger.info(f"  ✅ All cards loaded! Total: {current_card_count} (no change for {no_change_count} attempts)")
+                    break
+            else:
+                no_change_count = 0  # Reset counter if we found new cards
+                logger.info(f"  📈 Card count increased: {previous_card_count} -> {current_card_count}")
+            
+            previous_card_count = current_card_count
+            scroll_attempts += 1
+            
+            # Scroll back up a bit occasionally (human behavior) - but less frequently
+            if scroll_attempts % 5 == 0:
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight - 2000)")
+                time.sleep(random.uniform(1.0, 1.5))
+        
+        # Final aggressive scroll to very bottom multiple times
+        logger.info("  Performing final aggressive scroll to bottom...")
+        for final_scroll in range(5):
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            time.sleep(random.uniform(2.0, 3.0))
+            
+            # Check for load more buttons one more time
+            for selector in load_more_selectors:
+                try:
+                    load_more_btn = page.query_selector(selector)
+                    if load_more_btn and load_more_btn.is_visible():
+                        is_disabled = (
+                            load_more_btn.get_attribute('disabled') is not None or
+                            load_more_btn.get_attribute('aria-disabled') == 'true' or
+                            'disabled' in (load_more_btn.get_attribute('class') or '').lower()
+                        )
+                        if not is_disabled:
+                            card_count_before = len(page.query_selector_all('[data-test="property-card"], [data-testid="property-card"]'))
+                            logger.info(f"  Final scroll {final_scroll + 1}: Found 'Load More' button, clicking... (cards: {card_count_before})")
+                            load_more_btn.click()
+                            time.sleep(random.uniform(4.0, 5.0))
+                            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                            time.sleep(random.uniform(2.0, 3.0))
+                except Exception:
+                    continue
+        
+        # One more check for load more buttons
+        for selector in load_more_selectors:
+            try:
+                load_more_btn = page.query_selector(selector)
+                if load_more_btn and load_more_btn.is_visible():
+                    is_disabled = (
+                        load_more_btn.get_attribute('disabled') is not None or
+                        load_more_btn.get_attribute('aria-disabled') == 'true' or
+                        'disabled' in (load_more_btn.get_attribute('class') or '').lower()
+                    )
+                    if not is_disabled:
+                        card_count_before = len(page.query_selector_all('[data-test="property-card"], [data-testid="property-card"]'))
+                        logger.info(f"  Found final 'Load More' button, clicking... (cards before: {card_count_before})")
+                        load_more_btn.click()
+                        time.sleep(random.uniform(3.0, 4.5))
+                        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                        time.sleep(random.uniform(2.0, 3.0))
+                        card_count_after = len(page.query_selector_all('[data-test="property-card"], [data-testid="property-card"]'))
+                        if card_count_after > card_count_before:
+                            logger.info(f"  ✅ Final Load More worked! Cards increased from {card_count_before} to {card_count_after}")
+            except Exception:
+                continue
         
         # Scroll back to top
+        logger.info("Scrolling back to top to start collecting...")
         page.evaluate("window.scrollTo(0, 0)")
-        time.sleep(random.uniform(0.5, 1.0))
+        time.sleep(random.uniform(1.0, 1.5))
         
-        # Find all property cards
+        # Final comprehensive query of all property cards
+        logger.info("Performing final card count...")
+        
+        # Query all cards using the primary selectors
         property_cards = page.query_selector_all('[data-test="property-card"], [data-testid="property-card"]')
-        logger.info(f"Found {len(property_cards)} property cards on page")
+        
+        # If we didn't find many, try alternative selectors
+        if len(property_cards) < 10:
+            logger.info(f"  Only found {len(property_cards)} cards with primary selectors, trying alternatives...")
+            alt_cards = page.query_selector_all('article[data-test="property-card"], [class*="PropertyCard"]')
+            # Combine and deduplicate by checking hrefs
+            seen_hrefs = set()
+            for card in property_cards:
+                try:
+                    link = card.query_selector('a[href*="homedetails"], a[href*="/b/"]')
+                    if link:
+                        href = link.get_attribute('href')
+                        if href:
+                            seen_hrefs.add(href)
+                except Exception:
+                    pass
+            
+            for card in alt_cards:
+                try:
+                    link = card.query_selector('a[href*="homedetails"], a[href*="/b/"]')
+                    if link:
+                        href = link.get_attribute('href')
+                        if href and href not in seen_hrefs:
+                            property_cards.append(card)
+                            seen_hrefs.add(href)
+                except Exception:
+                    pass
+        
+        logger.info(f"✅ Found {len(property_cards)} property cards on page (ready to collect)")
         
         if not property_cards:
             logger.warning("No property cards found!")
@@ -429,35 +614,280 @@ def collect_urls_from_page(context, page: Page, seen_urls: Set[str], output_csv:
 
 
 def get_next_page_url(page: Page):
-    """Get the next page URL from pagination by clicking the next button."""
+    """Get the next page URL from pagination by clicking the next button or numbered page links."""
     try:
+        # Scroll to bottom where pagination usually is
+        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        time.sleep(random.uniform(1.0, 1.5))
+        
+        current_url = page.url
+        
+        # Strategy 1: Look for arrow/next button with various selectors
         next_selectors = [
             'a[aria-label="Next page"]',
             'a[aria-label="Next"]',
+            'a[aria-label*="Next" i]',
             'a[data-test="pagination-next"]',
             'a[data-testid="pagination-next"]',
             'button[aria-label="Next page"]',
             'button[aria-label="Next"]',
+            'button[aria-label*="Next" i]',
+            'a.next',
+            '[class*="Pagination"] a[aria-label*="Next" i]',
+            'nav a[aria-label*="Next" i]',
+            # Arrow icons
+            'a[aria-label*="arrow" i]',
+            'button[aria-label*="arrow" i]',
+            '[class*="arrow"][class*="next" i]',
+            '[class*="pagination"][class*="next" i]',
         ]
         
         for selector in next_selectors:
             try:
                 next_button = page.query_selector(selector)
-                if next_button and next_button.is_visible():
+                if next_button:
+                    # Check visibility
+                    try:
+                        if not next_button.is_visible():
+                            continue
+                    except Exception:
+                        pass  # Continue anyway
+                    
                     is_disabled = (next_button.get_attribute('aria-disabled') == 'true' or
-                                 'disabled' in (next_button.get_attribute('class') or '').lower())
+                                 'disabled' in (next_button.get_attribute('class') or '').lower() or
+                                 next_button.get_attribute('disabled') is not None)
                     
                     if not is_disabled:
-                        # Click the next button
+                        # Try to get href first
+                        href = next_button.get_attribute('href')
+                        if href:
+                            if href.startswith('/'):
+                                full_url = f"{BASE_URL}{href}"
+                            elif href.startswith('http'):
+                                full_url = href
+                            else:
+                                full_url = None
+                            
+                            if full_url and full_url != current_url:
+                                logger.info(f"Found next page href via arrow: {full_url}")
+                                next_button.click()
+                                time.sleep(random.uniform(2.0, 3.0))
+                                return page.url
+                        
+                        # If no href, try clicking and checking URL change
                         next_button.click()
-                        time.sleep(random.uniform(2.0, 3.0))  # Wait for page to load
-                        return page.url  # Return the new URL after clicking
-            except Exception:
+                        time.sleep(random.uniform(2.0, 3.0))
+                        new_url = page.url
+                        if new_url != current_url:
+                            logger.info(f"Next page found via arrow click: {new_url}")
+                            return new_url
+            except Exception as e:
+                logger.debug(f"Selector {selector} failed: {e}")
                 continue
+        
+        # Strategy 2: Look for numbered pagination links (2, 3, 4, etc.)
+        try:
+            # Find all pagination links/buttons
+            pagination_containers = page.query_selector_all(
+                'nav[aria-label*="pagination" i], '
+                '[class*="Pagination"], '
+                '[class*="pagination"], '
+                '[data-test*="pagination" i], '
+                '[data-testid*="pagination" i]'
+            )
+            
+            # Also try to find links that look like page numbers
+            all_pagination_links = []
+            
+            # Get links from pagination containers
+            for container in pagination_containers:
+                links = container.query_selector_all('a, button')
+                all_pagination_links.extend(links)
+            
+            # Also search for links/buttons with numeric text (page numbers)
+            numeric_links = page.query_selector_all('a, button')
+            for link in numeric_links:
+                try:
+                    text = link.inner_text().strip()
+                    # Check if it's a number (2, 3, 4, etc.) and not disabled
+                    if text.isdigit() and int(text) > 1:
+                        # Check if it's in a pagination context
+                        parent = link.evaluate('el => el.closest("nav, [class*=\"pagination\" i], [class*=\"Pagination\"]")')
+                        if parent:
+                            all_pagination_links.append(link)
+                except Exception:
+                    continue
+            
+            # Find the current page number
+            current_page_num = 1
+            try:
+                # Look for active/current page indicator
+                active_page = page.query_selector(
+                    '[aria-current="page"], '
+                    '[class*="active"][class*="page"], '
+                    '[class*="current"][class*="page"], '
+                    '[data-test*="current-page" i]'
+                )
+                if active_page:
+                    active_text = active_page.inner_text().strip()
+                    if active_text.isdigit():
+                        current_page_num = int(active_text)
+            except Exception:
+                pass
+            
+            # Look for the next page number (current + 1)
+            next_page_num = current_page_num + 1
+            
+            logger.info(f"Looking for page {next_page_num} (current: {current_page_num})")
+            
+            for link in all_pagination_links:
+                try:
+                    if not link.is_visible():
+                        continue
+                    
+                    is_disabled = (
+                        link.get_attribute('aria-disabled') == 'true' or
+                        'disabled' in (link.get_attribute('class') or '').lower() or
+                        link.get_attribute('disabled') is not None
+                    )
+                    
+                    if is_disabled:
+                        continue
+                    
+                    # Check if this link is for the next page
+                    text = link.inner_text().strip()
+                    href = link.get_attribute('href')
+                    
+                    # Determine if this is the next page link
+                    is_next_page = False
+                    match_reason = ""
+                    
+                    # Check by text (should be the next page number)
+                    if text == str(next_page_num):
+                        is_next_page = True
+                        match_reason = f"text matches page {next_page_num}"
+                    # Check by href (might contain page number)
+                    elif href and (f'/{next_page_num}_p/' in href or f'page={next_page_num}' in href or f'/p{next_page_num}/' in href):
+                        is_next_page = True
+                        match_reason = f"href contains page {next_page_num}"
+                    
+                    if is_next_page:
+                        logger.info(f"Found page {next_page_num} link by {match_reason}: {text or href}")
+                        
+                        # Get current card URLs/addresses before clicking to compare
+                        cards_before = page.query_selector_all('[data-test="property-card"], [data-testid="property-card"]')
+                        card_count_before = len(cards_before)
+                        card_urls_before = set()
+                        for card in cards_before[:5]:  # Get first 5 card URLs
+                            try:
+                                link_elem = card.query_selector('a[href*="homedetails"], a[href*="/b/"]')
+                                if link_elem:
+                                    href = link_elem.get_attribute('href')
+                                    if href:
+                                        card_urls_before.add(href)
+                            except Exception:
+                                pass
+                        
+                        # Click the link
+                        link.click()
+                        time.sleep(random.uniform(4.0, 5.5))  # Even longer wait for SPA navigation
+                        
+                        # Scroll to trigger any lazy loading
+                        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                        time.sleep(random.uniform(2.0, 3.0))
+                        page.evaluate("window.scrollTo(0, 0)")
+                        time.sleep(random.uniform(1.0, 1.5))
+                        
+                        new_url = page.url
+                        
+                        # Check if URL changed OR content changed (for SPAs)
+                        cards_after = page.query_selector_all('[data-test="property-card"], [data-testid="property-card"]')
+                        card_count_after = len(cards_after)
+                        
+                        # Get URLs from first few cards after click
+                        card_urls_after = set()
+                        for card in cards_after[:5]:  # Get first 5 card URLs
+                            try:
+                                link_elem = card.query_selector('a[href*="homedetails"], a[href*="/b/"]')
+                                if link_elem:
+                                    href = link_elem.get_attribute('href')
+                                    if href:
+                                        card_urls_after.add(href)
+                            except Exception:
+                                pass
+                        
+                        # Check if cards are different (different URLs)
+                        # If the intersection is smaller than either set, cards are different
+                        cards_different = (
+                            len(card_urls_before) > 0 and 
+                            len(card_urls_after) > 0 and 
+                            card_urls_before != card_urls_after
+                        )
+                        
+                        if new_url != current_url:
+                            logger.info(f"Page changed! URL: {current_url} -> {new_url}, Cards: {card_count_before} -> {card_count_after}")
+                            return new_url
+                        elif card_count_after != card_count_before:
+                            logger.info(f"Page content changed (SPA navigation)! Cards: {card_count_before} -> {card_count_after}")
+                            return new_url  # Return current URL even if it didn't change
+                        elif cards_different and len(card_urls_after) > 0:
+                            logger.info(f"Page content changed (different property cards)! Card URLs changed")
+                            return new_url  # Return current URL even if it didn't change
+                        else:
+                            logger.warning(f"No change detected after clicking page {next_page_num}. URL: {new_url}, Cards: {card_count_after}, Card URLs match: {not cards_different}")
+                            # Continue to next link
+                            
+                except Exception as e:
+                    logger.debug(f"Error checking pagination link: {e}")
+                    continue
+        except Exception as e:
+            logger.debug(f"Numbered pagination search failed: {e}")
+        
+        # Strategy 3: Fallback - Try to find pagination by text content
+        try:
+            all_links = page.query_selector_all('a, button')
+            for link in all_links:
+                try:
+                    text = link.inner_text().strip().lower()
+                    if text in ['next', 'next page', '→', '›', '»']:
+                        is_disabled = (link.get_attribute('aria-disabled') == 'true' or
+                                     'disabled' in (link.get_attribute('class') or '').lower())
+                        if not is_disabled:
+                            current_url = page.url
+                            link.click()
+                            time.sleep(random.uniform(2.0, 3.0))
+                            new_url = page.url
+                            if new_url != current_url:
+                                logger.info(f"Found next page via text/arrow search: {new_url}")
+                                return new_url
+                except Exception:
+                    continue
+        except Exception as e:
+            logger.debug(f"Text-based pagination search failed: {e}")
+            
     except Exception as e:
         logger.debug(f"Error finding next page: {e}")
     
     return None
+
+
+def load_existing_urls(csv_file: str) -> Set[str]:
+    """Load existing URLs from CSV file to avoid duplicates."""
+    seen_urls = set()
+    try:
+        import os
+        if os.path.exists(csv_file):
+            with open(csv_file, 'r', encoding='utf-8') as f:
+                reader = csv.reader(f)
+                next(reader, None)  # Skip header
+                for row in reader:
+                    if row and row[0].strip():
+                        normalized = normalize_url(row[0].strip())
+                        seen_urls.add(normalized)
+            logger.info(f"Loaded {len(seen_urls)} existing URLs from {csv_file}")
+    except Exception as e:
+        logger.warning(f"Error loading existing URLs: {e}")
+    return seen_urls
 
 
 def collect_urls(city: str, state: str, max_pages: int, delay: float, output_csv: str, headless: bool = False):
@@ -466,7 +896,7 @@ def collect_urls(city: str, state: str, max_pages: int, delay: float, output_csv
     state_normalized = state.lower()
     
     all_urls = []
-    seen_urls: Set[str] = set()
+    seen_urls = load_existing_urls(output_csv)  # Load existing URLs
     # Use the houses-for-rent URL format
     search_url = f"{BASE_URL}/{city_normalized}-{state_normalized}/rent-houses/"
     
@@ -538,10 +968,12 @@ def collect_urls(city: str, state: str, max_pages: int, delay: float, output_csv
                 # Try to go to next page
                 if page_num < max_pages:
                     logger.info("\nLooking for next page...")
+                    current_url_before = page.url  # Save URL before navigation
                     next_url = get_next_page_url(page)
-                    if next_url and next_url != page.url:
+                    if next_url:  # If we got a URL (even if same, it means navigation happened)
                         logger.info(f"✅ Next page found: {next_url}")
                         time.sleep(random.uniform(delay, delay + 1.0))
+                        # Continue to next iteration to collect URLs from the new page
                     else:
                         logger.info("❌ No next page found, stopping")
                         break
