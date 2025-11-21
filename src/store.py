@@ -41,13 +41,35 @@ class Store:
         """Create tables if they don't exist."""
         cursor = self.conn.cursor()
         
-        # phones table: phone (unique key), manager_name
+        # phones table: phone (unique key), agent_name, business_name
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS phones (
                 phone TEXT PRIMARY KEY,
-                manager_name TEXT
+                agent_name TEXT,
+                business_name TEXT
             )
         """)
+        
+        # Migrate old schema: add new columns if they don't exist
+        try:
+            cursor.execute("ALTER TABLE phones ADD COLUMN agent_name TEXT")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        
+        try:
+            cursor.execute("ALTER TABLE phones ADD COLUMN business_name TEXT")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        
+        # Migrate manager_name to agent_name if manager_name exists but agent_name doesn't
+        try:
+            cursor.execute("""
+                UPDATE phones 
+                SET agent_name = manager_name 
+                WHERE agent_name IS NULL AND manager_name IS NOT NULL AND manager_name != ''
+            """)
+        except sqlite3.OperationalError:
+            pass  # manager_name column doesn't exist (new schema)
         
         # addresses table: phone, address (unique per phone)
         cursor.execute("""
@@ -92,30 +114,38 @@ class Store:
         except sqlite3.IntegrityError:
             pass  # Already exists, ignore
     
-    def upsert_phone(self, phone: str, manager_name: Optional[str] = None):
+    def upsert_phone(self, phone: str, agent_name: Optional[str] = None, business_name: Optional[str] = None):
         """
         Insert or update phone record.
-        Only updates manager_name if it's empty and we have a new value.
+        Only updates agent_name/business_name if they're empty and we have new values.
         """
         cursor = self.conn.cursor()
         # Check if phone exists
-        cursor.execute("SELECT manager_name FROM phones WHERE phone = ?", (phone,))
+        cursor.execute("SELECT agent_name, business_name FROM phones WHERE phone = ?", (phone,))
         existing = cursor.fetchone()
         
         if existing:
-            # Update manager_name only if it's empty and we have a new value
-            if not existing['manager_name'] and manager_name:
+            # Update agent_name only if it's empty and we have a new value
+            if not existing['agent_name'] and agent_name:
                 cursor.execute(
-                    "UPDATE phones SET manager_name = ? WHERE phone = ?",
-                    (manager_name, phone)
+                    "UPDATE phones SET agent_name = ? WHERE phone = ?",
+                    (agent_name, phone)
                 )
                 self.conn.commit()
-                logger.debug(f"Updated manager_name for phone {phone}")
+                logger.debug(f"Updated agent_name for phone {phone}")
+            # Update business_name only if it's empty and we have a new value
+            if not existing['business_name'] and business_name:
+                cursor.execute(
+                    "UPDATE phones SET business_name = ? WHERE phone = ?",
+                    (business_name, phone)
+                )
+                self.conn.commit()
+                logger.debug(f"Updated business_name for phone {phone}")
         else:
             # Insert new phone
             cursor.execute(
-                "INSERT INTO phones (phone, manager_name) VALUES (?, ?)",
-                (phone, manager_name or '')
+                "INSERT INTO phones (phone, agent_name, business_name) VALUES (?, ?, ?)",
+                (phone, agent_name or '', business_name or '')
             )
             self.conn.commit()
             logger.debug(f"Inserted new phone {phone}")
@@ -161,16 +191,29 @@ class Store:
     def get_all_phones(self) -> List[dict]:
         """
         Get all phones with their addresses and units count.
-        Returns list of dicts with keys: phone, manager_name, addresses (list), units (int)
+        Returns list of dicts with keys: phone, agent_name, business_name, addresses (list), units (int)
         """
         cursor = self.conn.cursor()
-        cursor.execute("SELECT phone, manager_name FROM phones ORDER BY phone")
+        # Try to select agent_name and business_name, fallback to manager_name for old schema
+        try:
+            cursor.execute("SELECT phone, agent_name, business_name FROM phones ORDER BY phone")
+        except sqlite3.OperationalError:
+            # Old schema - try manager_name
+            cursor.execute("SELECT phone, manager_name as agent_name, '' as business_name FROM phones ORDER BY phone")
         phones = cursor.fetchall()
         
         results = []
         for phone_row in phones:
             phone = phone_row['phone']
-            manager_name = phone_row['manager_name'] or ''
+            # sqlite3.Row objects support dict-style access, but not .get()
+            try:
+                agent_name = phone_row['agent_name'] or ''
+            except (KeyError, IndexError):
+                agent_name = ''
+            try:
+                business_name = phone_row['business_name'] or ''
+            except (KeyError, IndexError):
+                business_name = ''
             
             # Get all addresses for this phone
             cursor.execute(
@@ -183,7 +226,8 @@ class Store:
             
             results.append({
                 'phone': phone,
-                'manager_name': manager_name,
+                'agent_name': agent_name,
+                'business_name': business_name,
                 'addresses': addresses,
                 'units': units
             })

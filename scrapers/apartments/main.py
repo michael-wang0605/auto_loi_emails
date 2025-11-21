@@ -1,8 +1,8 @@
 """
-Zillow.com Single-Family Rental (SFR) Scraper - Entry Point
+Apartments.com Single-Family Rental (SFR) Scraper - Entry Point
 
 CLI usage:
-    python -m src.zillow_main --city "Atlanta" --state "GA" --max_pages 40 --target_phones 200 --delay 3.0 --headless true --output zillow_sfr.csv
+    python -m src.main --city "Atlanta" --state "GA" --max_pages 40 --target_phones 200 --delay 3.0 --headless true --output apartments_sfr.csv
 """
 import argparse
 import logging
@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.zillow_scraper import scrape_city
+from scrapers.apartments.scraper import scrape_city
 from src.store import Store
 
 logging.basicConfig(
@@ -33,14 +33,17 @@ def export_to_csv(store: Store, output_path: str):
     """
     logger.info("Exporting data to CSV...")
     
+    # Get all phones with their data
     phones_data = store.get_all_phones()
     
     if not phones_data:
         logger.warning("No data to export")
         return
-    
+
+    # Prepare data for CSV
     records = []
     for data in phones_data:
+        # Join addresses with semicolon, deterministic order (sorted)
         addresses_str = '; '.join(sorted(data['addresses'])) if data['addresses'] else ''
         
         records.append({
@@ -49,13 +52,16 @@ def export_to_csv(store: Store, output_path: str):
             'addresses': addresses_str,
             'units': data['units']
         })
-    
+
+    # Create DataFrame and sort by phone ascending
     df = pd.DataFrame(records)
     df = df.sort_values(by='phone').reset_index(drop=True)
-    
+
+    # Write to CSV
     df.to_csv(output_path, index=False)
     logger.info(f"Exported {len(records)} records to {output_path}")
     
+    # Print summary
     print("\n" + "=" * 80)
     print("SCRAPING SUMMARY")
     print("=" * 80)
@@ -74,12 +80,12 @@ def export_to_csv(store: Store, output_path: str):
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description='Scrape Zillow.com for single-family rental listings',
+        description='Scrape Apartments.com for single-family rental listings',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python -m src.zillow_main --city "Atlanta" --state "GA" --max_pages 40 --target_phones 200 --delay 3.0 --headless true --output zillow_sfr.csv
-  python -m src.zillow_main --city "Atlanta" --state "GA" --max_pages 50 --target_phones 200 --delay 3.0 --headless false
+  python -m src.main --city "Atlanta" --state "GA" --max_pages 40 --target_phones 200 --delay 3.0 --headless true --output apartments_sfr.csv
+  python -m src.main --city "Atlanta" --state "GA" --max_pages 50 --target_phones 200 --delay 3.0 --headless false
         """
     )
     
@@ -128,15 +134,19 @@ Examples:
     parser.add_argument(
         '--output',
         type=str,
-        default='zillow_sfr.csv',
-        help='Output CSV file path (default: zillow_sfr.csv)'
+        default='data/apartments_sfr.csv',
+        help='Output CSV file path (default: data/apartments_sfr.csv)'
     )
     
     args = parser.parse_args()
     
+    # Parse headless boolean
     headless = parse_bool(args.headless)
+    
+    # Parse proxy (empty string means no proxy)
     proxy = args.proxy.strip() if args.proxy.strip() else None
     
+    # Validate inputs
     if args.max_pages < 1:
         logger.error("--max_pages must be at least 1")
         sys.exit(1)
@@ -149,13 +159,13 @@ Examples:
         logger.error("--delay must be non-negative")
         sys.exit(1)
     
-    # Use separate database for Zillow
-    db_path = "zillow_data.db"
+    # Initialize store
+    db_path = "data/data.db"
     store = Store(db_path)
     
     try:
         logger.info("=" * 80)
-        logger.info("ZILLOW.COM SFR SCRAPER")
+        logger.info("APARTMENTS.COM SFR SCRAPER")
         logger.info("=" * 80)
         logger.info(f"City: {args.city}")
         logger.info(f"State: {args.state}")
@@ -168,10 +178,12 @@ Examples:
         logger.info(f"Database: {db_path}")
         logger.info("=" * 80)
         
+        # Check existing progress
         existing_phones = store.get_unique_phones_count()
         if existing_phones > 0:
             logger.info(f"Resuming: Found {existing_phones} phones in database")
         
+        # Run scraper
         scrape_city(
             city=args.city,
             state=args.state,
@@ -184,6 +196,7 @@ Examples:
             output_path=args.output
         )
         
+        # Export to CSV
         export_to_csv(store, args.output)
         
         logger.info("Scraping completed successfully")
@@ -191,10 +204,12 @@ Examples:
     except KeyboardInterrupt:
         logger.info("\nScraping interrupted by user")
         logger.info("Progress saved to database. Re-run to resume.")
+        # Export partial results
         export_to_csv(store, args.output)
         sys.exit(0)
     except Exception as e:
         logger.error(f"Scraping failed: {e}", exc_info=True)
+        # Export partial results on error
         export_to_csv(store, args.output)
         sys.exit(1)
     finally:
@@ -203,4 +218,3 @@ Examples:
 
 if __name__ == "__main__":
     main()
-

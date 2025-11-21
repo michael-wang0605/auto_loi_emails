@@ -18,8 +18,8 @@ import pandas as pd
 from playwright.sync_api import sync_playwright, Page, TimeoutError as PlaywrightTimeoutError
 from bs4 import BeautifulSoup
 
-# Import store from parent directory
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Import store from project root
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from src.store import Store
 
 logging.basicConfig(
@@ -124,7 +124,77 @@ def parse_json_ld(soup: BeautifulSoup) -> Dict:
 
 def extract_phone_from_selectors(page: Page, soup: BeautifulSoup) -> Optional[str]:
     """Extract phone using selector fallbacks."""
-    # Method 1: tel: links
+    # Method 1: ds-listing-agent-info container (highest priority - contains both name and phone)
+    try:
+        agent_info_containers = page.query_selector_all('.ds-listing-agent-info, [class*="ds-listing-agent-info"]')
+        for container in agent_info_containers:
+            try:
+                if container.is_visible():
+                    text = container.inner_text().strip()
+                    if text:
+                        # Extract phone from container
+                        phone_pattern = r'(?:\+?1[\s\-\.]?)?\(?\d{3}\)?[\s\-\.]?\d{3}[\s\-\.]?\d{4}'
+                        matches = re.findall(phone_pattern, text)
+                        for match in matches:
+                            normalized = normalize_phone(match)
+                            if normalized:
+                                logger.debug(f"Found phone via ds-listing-agent-info container: {normalized}")
+                                return normalized
+            except Exception:
+                continue
+    except Exception:
+        pass
+    
+    # Also try with BeautifulSoup
+    if soup:
+        agent_info_containers = soup.find_all(class_=re.compile(r'ds-listing-agent-info'))
+        for container in agent_info_containers:
+            text = container.get_text(strip=True)
+            if text:
+                phone_pattern = r'(?:\+?1[\s\-\.]?)?\(?\d{3}\)?[\s\-\.]?\d{3}[\s\-\.]?\d{4}'
+                matches = re.findall(phone_pattern, text)
+                for match in matches:
+                    normalized = normalize_phone(match)
+                    if normalized:
+                        logger.debug(f"Found phone via ds-listing-agent-info container (soup): {normalized}")
+                        return normalized
+    
+    # Method 2: ds-listing-agent-info-text (fallback - specific text element)
+    try:
+        agent_info_elements = page.query_selector_all('li.ds-listing-agent-info-text, .ds-listing-agent-info-text')
+        for elem in agent_info_elements:
+            try:
+                if elem.is_visible():
+                    text = elem.inner_text().strip()
+                    if text:
+                        # Extract phone from text
+                        phone_pattern = r'(?:\+?1[\s\-\.]?)?\(?\d{3}\)?[\s\-\.]?\d{3}[\s\-\.]?\d{4}'
+                        matches = re.findall(phone_pattern, text)
+                        for match in matches:
+                            normalized = normalize_phone(match)
+                            if normalized:
+                                logger.debug(f"Found phone via ds-listing-agent-info-text: {normalized}")
+                                return normalized
+            except Exception:
+                continue
+    except Exception:
+        pass
+    
+    # Also try with BeautifulSoup
+    if soup:
+        agent_info_elements = soup.find_all('li', class_='ds-listing-agent-info-text')
+        for elem in agent_info_elements:
+            text = elem.get_text(strip=True)
+            if text:
+                phone_pattern = r'(?:\+?1[\s\-\.]?)?\(?\d{3}\)?[\s\-\.]?\d{3}[\s\-\.]?\d{4}'
+                matches = re.findall(phone_pattern, text)
+                for match in matches:
+                    normalized = normalize_phone(match)
+                    if normalized:
+                        logger.debug(f"Found phone via ds-listing-agent-info-text (soup): {normalized}")
+                        return normalized
+    
+    # Method 2: tel: links
     try:
         tel_links = page.query_selector_all('a[href^="tel:"]')
         for link in tel_links:
@@ -207,146 +277,69 @@ def extract_phone_from_regex(page: Page, soup: BeautifulSoup) -> Optional[str]:
     return None
 
 
-def extract_manager_and_phone_from_card(page: Page, soup: BeautifulSoup) -> tuple[Optional[str], Optional[str]]:
+def extract_agent_business_phone_from_card(page: Page, soup: BeautifulSoup) -> tuple[Optional[str], Optional[str], Optional[str]]:
     """
-    Extract manager name and phone from the same property card/agent card section.
-    Returns (manager_name, phone) tuple.
+    Extract agent name, business name, and phone from the ds-listing-agent-info container.
+    Simply checks for specific classes: ds-listing-agent-display-name and ds-listing-agent-business-name.
+    Returns (agent_name, business_name, phone) tuple.
     """
-    # Look for agent/listing card sections
-    card_selectors = [
-        '[class*="ds-agent-card"]',
-        '[class*="agent-card"]',
-        '[class*="listing-agent"]',
-        '[class*="ListingAgent"]',
-        '[class*="ds-listing-agent"]',
-        '[data-test*="agent-card"]',
-        '[data-test*="listing-agent"]',
-        '[class*="contact-card"]',
-        '[class*="property-contact"]',
-    ]
+    # Find ds-listing-agent-info container
+    try:
+        agent_info_containers = page.query_selector_all('.ds-listing-agent-info, [class*="ds-listing-agent-info"]')
+        for container in agent_info_containers:
+            try:
+                if container.is_visible():
+                    # Extract phone from container text
+                    container_text = container.inner_text()
+                    phone_pattern = r'(?:\+?1[\s\-\.]?)?\(?\d{3}\)?[\s\-\.]?\d{3}[\s\-\.]?\d{4}'
+                    phone_matches = re.findall(phone_pattern, container_text)
+                    
+                    phone = None
+                    for match in phone_matches:
+                        normalized = normalize_phone(match)
+                        if normalized:
+                            phone = normalized
+                            break
+                    
+                    # Extract agent name from ds-listing-agent-display-name
+                    agent_name = None
+                    try:
+                        display_name_elem = container.query_selector('.ds-listing-agent-display-name, [class*="ds-listing-agent-display-name"]')
+                        if display_name_elem:
+                            agent_name = display_name_elem.inner_text().strip()
+                            if agent_name:
+                                agent_name = clean_manager_name(agent_name)
+                    except Exception:
+                        pass
+                    
+                    # Extract business name from ds-listing-agent-business-name
+                    business_name = None
+                    try:
+                        business_name_elem = container.query_selector('.ds-listing-agent-business-name, [class*="ds-listing-agent-business-name"]')
+                        if business_name_elem:
+                            business_name = business_name_elem.inner_text().strip()
+                            if business_name:
+                                business_name = clean_manager_name(business_name)
+                    except Exception:
+                        pass
+                    
+                    # Return if we found at least a phone (names are optional, both can exist)
+                    if phone:
+                        logger.debug(f"Found from ds-listing-agent-info: phone={phone}, agent={agent_name}, business={business_name}")
+                        return (agent_name, business_name, phone)
+            except Exception:
+                continue
+    except Exception:
+        pass
     
-    for selector in card_selectors:
-        try:
-            cards = page.query_selector_all(selector)
-            for card in cards:
-                try:
-                    if card.is_visible():
-                        card_text = card.inner_text()
-                        
-                        # Extract phone from this card
-                        phone_pattern = r'(?:\+?1[\s\-\.]?)?\(?\d{3}\)?[\s\-\.]?\d{3}[\s\-\.]?\d{4}'
-                        phone_matches = re.findall(phone_pattern, card_text)
-                        
-                        # Extract manager name from this card
-                        # Look for patterns like:
-                        # "Listed by property owner"
-                        # "Wendy Yuen"
-                        # "Chaves & Yuen LLC"
-                        
-                        lines = [line.strip() for line in card_text.split('\n') if line.strip()]
-                        
-                        manager_name = None
-                        phone = None
-                        
-                        # Find phone first
-                        for match in phone_matches:
-                            normalized = normalize_phone(match)
-                            if normalized:
-                                phone = normalized
-                                break
-                        
-                        # Find manager name - look for capitalized names (First Last or Company Name)
-                        # Skip lines that are labels like "Listed by property owner"
-                        skip_labels = ['listed by', 'managed by', 'contact', 'agent', 'owner', 'verified source', 'source']
-                        
-                        person_names = []  # Store person names (First Last)
-                        company_names = []  # Store company names
-                        
-                        for line in lines:
-                            line_clean = line.strip()
-                            
-                            # Skip if it's a phone number
-                            if re.match(phone_pattern, line_clean):
-                                continue
-                            
-                            # Skip if it's a label
-                            if any(label in line_clean.lower() for label in skip_labels):
-                                continue
-                            
-                            # Skip if it's too short or looks like an address
-                            if len(line_clean) < 3 or re.match(r'^\d+', line_clean):
-                                continue
-                            
-                            # Skip if it contains common UI words or phrases
-                            ui_words = ['photos', 'accepts', 'zillow', 'appl', 'verified', 'source', 
-                                       'contacts', 'list', 'property manager', 'sets', 'criteria', 'or']
-                            if any(word in line_clean.lower() for word in ui_words):
-                                continue
-                            
-                            # Skip if it's a sentence (contains verbs like "sets", "or", etc.)
-                            if any(verb in line_clean.lower() for verb in ['sets', 'or', 'and', 'the', 'for', 'with']):
-                                # But allow "&" in company names like "Clarke & Peek"
-                                if '&' not in line_clean:
-                                    continue
-                            
-                            # Look for name patterns: "First Last" or "Company Name LLC"
-                            # Must start with capital letter and have at least 2 words or be 8+ chars
-                            words = line_clean.split()
-                            if len(words) >= 2:
-                                # Check if it looks like a name (starts with capital, no numbers)
-                                if (line_clean[0].isupper() and 
-                                    not re.search(r'\d', line_clean) and
-                                    len(line_clean) < 80):
-                                    # Prefer person names (2-3 words, typically First Last or First Middle Last)
-                                    if 2 <= len(words) <= 3:
-                                        # Additional check: each word should be capitalized (name-like)
-                                        if all(word[0].isupper() for word in words if word):
-                                            person_names.append(line_clean)
-                                    elif len(words) <= 5:
-                                        # Longer names are likely company names (but not too long)
-                                        # Check if it contains "LLC", "Inc", "Corp", or "&"
-                                        if any(marker in line_clean for marker in ['LLC', 'Inc', 'Corp', '&', 'Properties']):
-                                            company_names.append(line_clean)
-                            elif len(line_clean) >= 8 and line_clean[0].isupper():
-                                # Could be a company name (single word, 8+ chars)
-                                if not re.search(r'\d', line_clean):
-                                    company_names.append(line_clean)
-                        
-                        # Prioritize person names over company names
-                        if person_names:
-                            manager_name = person_names[0]  # Take first person name found
-                        elif company_names:
-                            manager_name = company_names[0]  # Fallback to company name
-                        else:
-                            manager_name = None  # No valid name found
-                        
-                        # Clean and validate manager name if we found one
-                        if manager_name:
-                            manager_name = clean_manager_name(manager_name)
-                            # Final validation - must be at least 2 words or 8+ chars
-                            words = manager_name.split()
-                            if len(words) < 2 and len(manager_name) < 8:
-                                manager_name = None
-                            # Additional check: must not contain common non-name words
-                            invalid_words = ['or', 'and', 'the', 'for', 'with', 'sets', 'criteria', 'manager', 'property']
-                            if any(word in manager_name.lower() for word in invalid_words):
-                                manager_name = None
-                        
-                        # Return even if manager_name is None (we still want the phone)
-                        return (manager_name, phone)
-                            
-                except Exception:
-                    continue
-        except Exception:
-            continue
-    
-    return (None, None)
+    # Fallback: Just return None for names, phone extraction will be handled by other methods
+    return (None, None, None)
 
 
 def extract_phone(page: Page, soup: BeautifulSoup) -> Optional[str]:
     """Extract phone using property card → JSON-LD → selectors → regex fallback order."""
-    # Method 1: Try to get phone from property card (along with manager name)
-    _, phone = extract_manager_and_phone_from_card(page, soup)
+    # Method 1: Try to get phone from property card (along with agent/business name)
+    _, _, phone = extract_agent_business_phone_from_card(page, soup)
     if phone:
         return phone
     
@@ -399,6 +392,20 @@ def extract_address_from_selectors(page: Page, soup: BeautifulSoup) -> Optional[
             addr = street_elem.get('content').strip()
             if addr:
                 return addr
+        
+        # Also check for Text-c11n class in soup
+        text_elem = soup.find(class_=re.compile(r'Text-c11n.*sc-aiai24.*cEHZrB|cEHZrB'))
+        if not text_elem:
+            text_elem = soup.find(class_=re.compile(r'cEHZrB'))
+        if text_elem:
+            text = text_elem.get_text(strip=True)
+            if text and len(text) > 10 and len(text) < 200:
+                if re.search(r'^\d+', text):
+                    lines = text.split('\n')
+                    addr = lines[0].split(',')[0].strip()
+                    if addr and not any(word in addr.lower() for word in ['photos', 'accepts', 'zillow', 'appl']):
+                        logger.debug(f"Found address via Text-c11n class (soup): {addr}")
+                        return addr
     
     try:
         meta_elem = page.query_selector('meta[itemprop="streetAddress"]')
@@ -409,8 +416,43 @@ def extract_address_from_selectors(page: Page, soup: BeautifulSoup) -> Optional[
     except Exception:
         pass
     
+    # Method 1.5: Check for Text-c11n-8-109-3__sc-aiai24-0 cEHZrB class (specific Zillow address class)
+    try:
+        # Try exact class match first
+        text_elem = page.query_selector('.Text-c11n-8-109-3__sc-aiai24-0.cEHZrB, [class*="Text-c11n"][class*="sc-aiai24"][class*="cEHZrB"]')
+        if not text_elem:
+            # Try with just the pattern parts
+            text_elem = page.query_selector('[class*="Text-c11n"][class*="cEHZrB"]')
+        if not text_elem:
+            # Try with just sc-aiai24 pattern
+            text_elem = page.query_selector('[class*="sc-aiai24"][class*="cEHZrB"]')
+        if not text_elem:
+            # Try with just cEHZrB
+            text_elem = page.query_selector('[class*="cEHZrB"]')
+        
+        if text_elem:
+            text = text_elem.inner_text().strip()
+            if text and len(text) > 10 and len(text) < 200:
+                # Must start with a number (street address)
+                if re.search(r'^\d+', text):
+                    lines = text.split('\n')
+                    addr = lines[0].split(',')[0].strip()
+                    # Exclude if it contains UI text
+                    if addr and not any(word in addr.lower() for word in ['photos', 'accepts', 'zillow', 'appl']):
+                        logger.debug(f"Found address via Text-c11n class: {addr}")
+                        return addr
+    except Exception:
+        pass
+    
     # Method 2: Zillow-specific address selectors
     address_selectors = [
+        # Specific Zillow address class (Text-c11n-8-109-3__sc-aiai24-0 cEHZrB)
+        '.Text-c11n-8-109-3__sc-aiai24-0.cEHZrB',
+        '[class*="Text-c11n"][class*="sc-aiai24"][class*="cEHZrB"]',
+        '[class*="Text-c11n"][class*="cEHZrB"]',
+        '[class*="sc-aiai24"][class*="cEHZrB"]',
+        '[class*="cEHZrB"]',
+        # Other address selectors
         'h1[data-test="property-card-addr"]',
         '[data-test="property-card-addr"]',
         '.PropertyHeaderContainer h1',
@@ -545,6 +587,33 @@ def extract_address(page: Page, soup: BeautifulSoup) -> Optional[str]:
 
 def extract_manager_name_from_selectors(page: Page, soup: BeautifulSoup) -> Optional[str]:
     """Extract manager name using selector fallbacks. Excludes city/state names."""
+    # Method 1: Check for business name element (ds-listing-agent-business-name) - highest priority
+    try:
+        business_name_elems = page.query_selector_all('.ds-listing-agent-business-name, [class*="ds-listing-agent-business-name"]')
+        for elem in business_name_elems:
+            try:
+                if elem.is_visible():
+                    business_name = elem.inner_text().strip()
+                    if business_name and len(business_name) >= 3 and len(business_name) <= 80:
+                        # Validate it's not a city/state/address
+                        if not re.match(r'^[A-Z][a-z]+\s+[A-Z]{2}$', business_name) and not re.match(r'^\d+', business_name):
+                            logger.debug(f"Found manager name via ds-listing-agent-business-name: {business_name}")
+                            return clean_manager_name(business_name)
+            except Exception:
+                continue
+    except Exception:
+        pass
+    
+    # Also try with BeautifulSoup
+    if soup:
+        business_name_elems = soup.find_all(class_=re.compile(r'ds-listing-agent-business-name'))
+        for elem in business_name_elems:
+            business_name = elem.get_text(strip=True)
+            if business_name and len(business_name) >= 3 and len(business_name) <= 80:
+                if not re.match(r'^[A-Z][a-z]+\s+[A-Z]{2}$', business_name) and not re.match(r'^\d+', business_name):
+                    logger.debug(f"Found manager name via ds-listing-agent-business-name (soup): {business_name}")
+                    return clean_manager_name(business_name)
+    
     page_text = ""
     
     try:
@@ -805,8 +874,10 @@ def clean_manager_name(name: str) -> str:
 
 def extract_manager_name(page: Page, soup: BeautifulSoup) -> Optional[str]:
     """Extract manager name using property card → selectors → JSON-LD fallback order. Excludes city/state."""
-    # Method 1: Try to get manager name from property card (along with phone) - MOST RELIABLE
-    manager_name, _ = extract_manager_and_phone_from_card(page, soup)
+    # Method 1: Try to get agent/business name from property card (along with phone) - MOST RELIABLE
+    agent_name, business_name, _ = extract_agent_business_phone_from_card(page, soup)
+    # Prefer agent name, fallback to business name
+    manager_name = agent_name or business_name
     if manager_name:
         return manager_name
     
@@ -884,30 +955,48 @@ def scrape_property_url(page: Page, url: str, store: Store) -> Optional[Dict]:
         html = page.content()
         soup = BeautifulSoup(html, 'html.parser')
         
-        # Extract phone (required)
-        phone = extract_phone(page, soup)
+        # Extract phone, agent name, and business name from card (most reliable)
+        agent_name, business_name, phone = extract_agent_business_phone_from_card(page, soup)
+        
+        # If no phone from card, try other methods
         if not phone:
-            logger.warning(f"  ❌ No phone found for {url}")
-            store.mark_url_crawled(normalized_url)
-            return None
+            phone = extract_phone(page, soup)
+            if not phone:
+                logger.warning(f"  ❌ No phone found for {url}")
+                store.mark_url_crawled(normalized_url)
+                return None
+        
+        # If no agent/business name from card, try other methods
+        if not agent_name and not business_name:
+            # Try extract_manager_name as fallback (returns combined name)
+            fallback_name = extract_manager_name(page, soup)
+            if fallback_name:
+                # Try to determine if it's an agent name or business name
+                words = fallback_name.split()
+                if 2 <= len(words) <= 3 and all(word[0].isupper() for word in words if word):
+                    agent_name = fallback_name
+                elif any(marker in fallback_name for marker in ['LLC', 'Inc', 'Corp', '&', 'Properties', 'Property', 'Management']):
+                    business_name = fallback_name
+                else:
+                    # Default to agent name if unclear
+                    agent_name = fallback_name
         
         # Extract address (best-effort)
         address = extract_address(page, soup)
-        
-        # Extract manager name (best-effort) - can be None/empty
-        manager_name = extract_manager_name(page, soup)
         
         # Mark URL as crawled
         store.mark_url_crawled(normalized_url)
         
         # Log extraction results
-        manager_display = manager_name if manager_name else 'None'
-        logger.info(f"  ✅ Extracted: phone={phone}, address={address or 'N/A'}, manager={manager_display}")
+        agent_display = agent_name if agent_name else 'None'
+        business_display = business_name if business_name else 'None'
+        logger.info(f"  ✅ Extracted: phone={phone}, address={address or 'N/A'}, agent={agent_display}, business={business_display}")
         
         return {
             'phone': phone,
             'address': address or '',
-            'manager_name': manager_name or ''  # Empty string if no manager name found
+            'agent_name': agent_name or '',  # Empty string if no agent name found
+            'business_name': business_name or ''  # Empty string if no business name found
         }
         
     except Exception as e:
@@ -932,7 +1021,8 @@ def export_to_csv(store: Store, output_path: str):
         
         records.append({
             'phone': data['phone'],
-            'manager_name': data['manager_name'] or '',
+            'agent_name': data.get('agent_name', '') or '',
+            'business_name': data.get('business_name', '') or '',
             'addresses': addresses_str,
             'units': data['units']
         })
@@ -983,7 +1073,7 @@ def scrape_from_urls(input_csv: str, output_csv: str, delay: float, headless: bo
     logger.info("=" * 80)
     
     # Initialize store
-    db_path = "zillow_data.db"
+    db_path = "data/zillow_data.db"
     store = Store(db_path)
     
     try:
@@ -1025,9 +1115,10 @@ def scrape_from_urls(input_csv: str, output_csv: str, delay: float, headless: bo
                     if data:
                         phone = data['phone']
                         address = data['address']
-                        manager_name = data['manager_name']
+                        agent_name = data.get('agent_name', '')
+                        business_name = data.get('business_name', '')
                         
-                        store.upsert_phone(phone, manager_name)
+                        store.upsert_phone(phone, agent_name, business_name)
                         
                         if address:
                             store.add_address(phone, address)
@@ -1066,8 +1157,8 @@ def scrape_from_urls(input_csv: str, output_csv: str, delay: float, headless: bo
 
 def main():
     parser = argparse.ArgumentParser(description='Scrape data from Zillow property URLs')
-    parser.add_argument('--input', type=str, default='zillow_urls.csv', help='Input CSV with URLs (default: zillow_urls.csv)')
-    parser.add_argument('--output', type=str, default='zillow_sfr.csv', help='Output CSV file (default: zillow_sfr.csv)')
+    parser.add_argument('--input', type=str, default='data/zillow_urls.csv', help='Input CSV with URLs (default: data/zillow_urls.csv)')
+    parser.add_argument('--output', type=str, default='data/zillow_sfr.csv', help='Output CSV file (default: data/zillow_sfr.csv)')
     parser.add_argument('--delay', type=float, default=3.0, help='Delay between requests in seconds (default: 3.0)')
     parser.add_argument('--headless', action='store_true', help='Run browser in headless mode')
     

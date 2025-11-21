@@ -1,239 +1,310 @@
-# Apartments.com Single-Family Rental (SFR) Scraper
+# Auto LOI Emails - Single Family Rental (SFR) Scraper
 
-A robust Python scraper that collects contact information for single-family rentals from Apartments.com, focused on accuracy over speed. Uses Playwright for JavaScript-rendered pages, SQLite for persistent checkpointing, and multi-fallback extraction strategies.
+A comprehensive Python scraper system that collects contact information for single-family rentals from **Apartments.com** and **Zillow**. Uses Playwright for browser automation, SQLite for persistent checkpointing, and multi-fallback extraction strategies for maximum accuracy.
 
 ## Features
 
+- ✅ **Dual Source Scraping**: Collects data from both Apartments.com and Zillow
 - ✅ **Playwright Navigation**: Handles JavaScript-rendered pages reliably
-- ✅ **Multi-Fallback Extraction**: JSON-LD → Selectors → Regex fallbacks for maximum accuracy
+- ✅ **Multi-Fallback Extraction**: JSON-LD → Selectors → Regex fallbacks
 - ✅ **SQLite Persistence**: Resume capability with checkpointing
 - ✅ **Phone-Based Deduplication**: Keyed by normalized phone number
 - ✅ **Address Aggregation**: Groups multiple addresses per phone
-- ✅ **Rate Limiting**: Configurable delays with ±0.6s jitter
-- ✅ **Retry Logic**: 3 attempts with incremental backoff (1s, 2s, 4s)
-- ✅ **Graceful Error Handling**: Comprehensive logging and error recovery
+- ✅ **Rate Limiting**: Configurable delays with random jitter
+- ✅ **Human-like Behavior**: Slow scrolling, random delays, stealth techniques
+- ✅ **Master CSV Combiner**: Merges data from both sources
+
+## Project Structure
+
+```
+auto_loi_emails/
+├── scrapers/                 # Scraper scripts
+│   ├── __init__.py
+│   ├── apartments/          # Apartments.com scraper
+│   │   ├── __init__.py
+│   │   ├── main.py          # Entry point
+│   │   └── scraper.py       # Scraping logic
+│   └── zillow/              # Zillow scraper
+│       ├── __init__.py
+│       ├── collect_urls.py  # Step 1: Collect property URLs
+│       └── scrape_from_urls.py  # Step 2: Scrape contact info
+├── src/                      # Shared utilities
+│   ├── __init__.py
+│   ├── store.py            # SQLite database utilities
+│   └── combine.py           # Master CSV combiner
+├── data/                     # Data files (CSVs, databases)
+│   ├── apartments_sfr.csv
+│   ├── zillow_urls.csv
+│   ├── zillow_sfr.csv
+│   ├── master_sfr.csv
+│   ├── data.db              # Apartments.com database
+│   └── zillow_data.db       # Zillow database
+├── requirements.txt          # Python dependencies
+├── README.md                 # This file
+├── .gitignore               # Git ignore rules
+└── venv/                     # Virtual environment (not in git)
+```
 
 ## Requirements
 
-- Python 3.11+
+- Python 3.9+
 - Internet connection
 
 ## Setup
 
-1. **Activate virtual environment** (if not already active):
+1. **Clone the repository**:
    ```bash
-   source venv/bin/activate  # On macOS/Linux
-   # or
-   venv\Scripts\activate  # On Windows
+   git clone <repository-url>
+   cd auto_loi_emails
    ```
 
-2. **Install dependencies**:
+2. **Create and activate virtual environment**:
+   ```bash
+   python3 -m venv venv
+   source venv/bin/activate  # On macOS/Linux
+   # or
+   venv\Scripts\activate     # On Windows
+   ```
+
+3. **Install dependencies**:
    ```bash
    pip install -r requirements.txt
    ```
 
-3. **Install Playwright browsers**:
+4. **Install Playwright browsers**:
    ```bash
    python -m playwright install chromium
    ```
    
-   This will install the Chromium browser needed for headless scraping.
+   This installs the Chromium browser needed for headless scraping.
 
 ## Usage
 
-### Basic Example
+### 1. Apartments.com Scraper
 
+Scrapes single-family rental listings from Apartments.com.
+
+**Basic usage**:
 ```bash
-python -m src.main --city "Atlanta" --state "GA"
+python -m scrapers.apartments.main --city "Atlanta" --state "GA"
 ```
 
-### Full Example (Matching Spec)
-
+**Full example**:
 ```bash
-python -m src.main --city "Atlanta" --state "GA" --max_pages 40 --target_phones 200 --delay 3.0 --headless true --output apartments_sfr.csv
+python -m scrapers.apartments.main \
+  --city "Atlanta" \
+  --state "GA" \
+  --max_pages 40 \
+  --target_phones 200 \
+  --delay 3.0 \
+  --headless true
 ```
 
-### Command-Line Arguments
-
+**Arguments**:
 - `--city` (required): City name (e.g., "Atlanta")
 - `--state` (required): State abbreviation (e.g., "GA")
-- `--max_pages` (optional): Maximum number of search result pages to scrape (default: 50)
-- `--target_phones` (optional): Stop when this many unique phone keys are stored (default: 200)
-- `--delay` (optional): Base seconds between navigations; adds ±0.6s jitter (default: 3.0)
+- `--max_pages` (optional): Maximum pages to scrape (default: 50)
+- `--target_phones` (optional): Stop when this many unique phones are found (default: 200)
+- `--delay` (optional): Base delay between navigations in seconds (default: 3.0)
 - `--headless` (optional): Run browser in headless mode: true|false (default: true)
-- `--proxy` (optional): Optional HTTP proxy string; if empty, no proxy (default: empty)
-- `--output` (optional): Output CSV file path (default: apartments_sfr.csv)
+- `--output` (optional): Output CSV file path (default: data/apartments_sfr.csv)
 
-## Output
+**Output**: `data/apartments_sfr.csv` with columns: `phone`, `manager_name`, `addresses`, `units`
 
-The scraper generates a CSV file with the following schema:
+### 2. Zillow Scraper
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `phone` | string | Phone number (normalized, unique key) |
-| `manager_name` | string | Property manager/community name (best-effort) |
-| `addresses` | string | Semicolon-separated list of unique addresses |
-| `units` | int | Count of unique addresses for that phone |
+The Zillow scraper works in two steps:
 
-### Example Output
+#### Step 1: Collect Property URLs
 
+Collects property URLs from Zillow search pages. Runs indefinitely until no more pages are available.
+
+```bash
+python scrapers/zillow/collect_urls.py \
+  --city "Atlanta" \
+  --state "GA" \
+  --delay 3.0 \
+  --output data/zillow_urls.csv
+```
+
+**Arguments**:
+- `--city` (required): City name (e.g., "Atlanta")
+- `--state` (required): State abbreviation (e.g., "GA")
+- `--max_pages` (optional): Maximum pages to scrape (default: unlimited, runs until no more pages)
+- `--delay` (optional): Delay between pages in seconds (default: 3.0)
+- `--output` (optional): Output CSV file for URLs (default: data/zillow_urls.csv)
+- `--headless` (optional): Run browser in headless mode (add flag)
+
+**Output**: `data/zillow_urls.csv` with column: `url`
+
+#### Step 2: Scrape Contact Info from URLs
+
+Scrapes contact information (phone, address, agent name, business name) from collected URLs.
+
+```bash
+python scrapers/zillow/scrape_from_urls.py \
+  --input data/zillow_urls.csv \
+  --output data/zillow_sfr.csv \
+  --delay 3.0
+```
+
+**Arguments**:
+- `--input` (required): Input CSV file with URLs (e.g., `data/zillow_urls.csv`)
+- `--output` (optional): Output CSV file (default: data/zillow_sfr.csv)
+- `--delay` (optional): Delay between URLs in seconds (default: 3.0)
+- `--headless` (optional): Run browser in headless mode (add flag)
+
+**Output**: `data/zillow_sfr.csv` with columns: `phone`, `agent_name`, `business_name`, `addresses`, `units`
+
+### 3. Combine Data from Both Sources
+
+Combines data from Apartments.com and Zillow into a master CSV with source tracking.
+
+```bash
+python -m src.combine \
+  --apartments data/apartments_sfr.csv \
+  --zillow data/zillow_sfr.csv \
+  --output data/master_sfr.csv
+```
+
+**Arguments**:
+- `--apartments` (required): Apartments.com CSV file path
+- `--zillow` (required): Zillow CSV file path
+- `--output` (optional): Output master CSV file (default: data/master_sfr.csv)
+
+**Output**: `data/master_sfr.csv` with columns: `phone`, `manager_name`, `addresses`, `units`, `source`
+
+## Data Extraction Details
+
+### Apartments.com
+
+Extracts from listing detail pages:
+- **Phone**: JSON-LD → tel: links → selectors → regex
+- **Address**: JSON-LD → meta tags → selectors → regex
+- **Manager Name**: JSON-LD → labels → selectors → regex
+
+### Zillow
+
+Extracts from property detail pages:
+- **Phone**: `ds-listing-agent-info` container → JSON-LD → selectors → regex
+- **Agent Name**: `ds-listing-agent-display-name` class
+- **Business Name**: `ds-listing-agent-business-name` class
+- **Address**: `Text-c11n-8-109-3__sc-aiai24-0 cEHZrB` class → meta tags → selectors → regex
+
+## Output Format
+
+### Apartments.com CSV
 ```csv
 phone,manager_name,addresses,units
 4045551234,"ABC Property Management","123 Main St; 456 Oak Ave",2
 4045559876,"","789 Pine Rd",1
 ```
 
-## How It Works
-
-### 1. Search & Discovery
-- Constructs search URLs using `/houses/<city>-<state>` path
-- Paginates through results up to `--max_pages`
-- Uses one browser + one context for the whole run
-- Reuses `resultsPage` for search pagination and `detailPage` for property links
-
-### 2. Data Extraction (Multi-Fallback Strategy)
-
-For each listing detail page, extraction follows this order:
-
-#### Phone Extraction:
-1. **JSON-LD**: Parse `<script type="application/ld+json">` blocks for `telephone`
-2. **Selectors**: Look for `a[href^="tel:"]` and phone patterns in likely elements
-3. **Regex**: Fallback to regex pattern `(?:\+?1[\s\-\.]?)?\(?\d{3}\)?[\s\-\.]?\d{3}[\s\-\.]?\d{4}`
-
-#### Address Extraction:
-1. **JSON-LD**: Extract `address` from JSON-LD (builds full address from components)
-2. **Selectors**: `meta[itemprop=streetAddress]`, `address` tags, elements with `data-testid/class` containing "Address"
-3. **Regex**: Fallback to regex for US street lines (street number + common suffix)
-
-#### Manager Name Extraction:
-1. **JSON-LD**: Extract `name` from JSON-LD
-2. **Selectors**: Look for labels "Managed by", "Leasing Office", "Property Management", "Community"; else H1/H2 near address
-3. **Regex**: Fallback to page title patterns
-
-### 3. Normalization
-- **Phone**: Strip non-digits, accept 10 or 11 digits (11 if starts with 1)
-- **Address**: Title case, collapse whitespace
-- **Skip**: Listings without a valid phone (phone is the unique key)
-
-### 4. Persistence & Checkpointing
-
-Uses SQLite database (`data.db`) with three tables:
-
-- **phones**: `phone TEXT PRIMARY KEY, manager_name TEXT`
-- **addresses**: `phone TEXT, address TEXT, UNIQUE(phone, address)`
-- **crawled_urls**: `url TEXT PRIMARY KEY`
-
-On each successful extraction:
-- Upsert phone + optional manager_name (only overwrite if empty)
-- Insert address if new
-- Mark URL as crawled
-
-Derive units per phone as `COUNT(addresses WHERE phone = ?)`.
-
-### 5. Resume Capability
-
-- On start, reads progress from database
-- Skips URLs that have already been crawled
-- Can be re-run to resume without duplicating work
-- Exports partial results on interruption (Ctrl+C)
-
-### 6. Export
-- Materializes to pandas: one row per phone
-- Sorts by phone ascending (deterministic order)
-- Writes to CSV with columns: `phone`, `manager_name`, `addresses`, `units`
-- Prints summary: unique phones found, total addresses, preview of first 5 rows
-
-## Navigation & Robustness
-
-- Uses one browser + one context for the whole run
-- Reuses pages: `resultsPage` for search pagination, `detailPage` for property links
-- For each results page:
-  - `goto(url, timeout=60000, wait_until="domcontentloaded")`
-  - `wait_for_selector` for listing links (10-15s)
-  - Collect unique detail URLs; normalize them (remove query params)
-- For each detail URL:
-  - `goto(detail, timeout=60000, wait_until="domcontentloaded")`
-  - Wait for body
-  - Extract via JSON-LD → selectors → regex
-- Retries: Wrap each `goto` in 3 attempts (1s, 2s, 4s backoff), then skip
-- Pacing: Sleep `delay ± 0.6s` between page loads
-
-## Project Structure
-
+### Zillow CSV
+```csv
+phone,agent_name,business_name,addresses,units
+4045551234,"John Smith","ABC Properties LLC","123 Main St",1
+4045559876,"","","789 Pine Rd",1
 ```
-auto_loi_emails/
-├── src/
-│   ├── __init__.py
-│   ├── main.py          # Entry point with CLI parsing
-│   ├── scraper.py       # Playwright navigation and extraction
-│   └── store.py         # SQLite database helpers
-├── requirements.txt     # Python dependencies
-├── README.md           # This file
-├── data.db             # SQLite database (generated)
-└── apartments_sfr.csv  # Output CSV (generated)
+
+### Master CSV
+```csv
+phone,manager_name,addresses,units,source
+4045551234,"ABC Property Management","123 Main St; 456 Oak Ave",2,apartments
+4045555678,"John Smith","789 Pine Rd",1,zillow
+4045559999,"XYZ Properties","111 Oak St",1,both
 ```
 
 ## Dependencies
 
-- `playwright`: Browser automation with Chromium
-- `beautifulsoup4`: HTML parsing
-- `pandas`: CSV export
-- `lxml`: Fast HTML parser
+- `playwright>=1.40.0`: Browser automation
+- `beautifulsoup4>=4.12.2`: HTML parsing
+- `pandas>=2.1.4`: CSV handling
+- `lxml>=4.9.3`: Fast HTML parser
 
-**Note**: After installing dependencies with `pip install -r requirements.txt`, you must also install the Playwright browsers:
-```bash
-python -m playwright install chromium
-```
+## Database Files
 
-## Error Handling
+The scrapers use SQLite databases for persistence:
+- `data/data.db`: Apartments.com progress tracking
+- `data/zillow_data.db`: Zillow progress tracking
 
-The scraper includes:
-- Graceful handling of network errors
-- Timeout protection (60 seconds)
-- Retry logic with incremental backoff
-- Logging at INFO level for progress tracking
-- Saves partial results if interrupted (Ctrl+C)
-- Continues processing even if individual pages fail
+These databases track:
+- Crawled URLs (to avoid duplicates)
+- Phone numbers and associated data
+- Addresses per phone number
+
+You can safely delete these files to start fresh, but you'll lose progress tracking.
+
+## Resume Capability
+
+Both scrapers support resume functionality:
+- **Apartments.com**: Re-run the same command to resume from where you left off
+- **Zillow URL Collection**: Automatically skips URLs already in the CSV
+- **Zillow Scraping**: Uses database to track crawled URLs
+
+## Rate Limiting & Stealth
+
+The scrapers include:
+- Configurable delays with random jitter
+- Human-like scrolling and mouse movements
+- Stealth techniques to avoid bot detection
+- Random delays between actions
+
+**Recommendation**: Use `--delay 3.0` or higher to avoid rate limiting.
 
 ## Troubleshooting
 
 ### No listings found
-- Verify the city and state are correct
-- Check if Apartments.com has listings for that area
-- The search URL pattern uses `/houses/<city>-<state>/` which may vary
+- Verify city and state are correct
+- Check if the source website has listings for that area
+- Try running with `--headless false` to see what's happening
 
 ### Missing phone numbers
 Some listings may not have phone numbers publicly available. These are skipped as phone is the required unique key.
 
-### Rate limiting issues
-If you encounter rate limiting:
+### Rate limiting / CAPTCHAs
 - Increase the `--delay` parameter (e.g., `--delay 5.0`)
-- The random jitter (±0.6 seconds) is automatically added to delays
+- Run with `--headless false` to manually solve CAPTCHAs if needed
+- The scrapers include stealth techniques, but aggressive scraping may still trigger protections
 
-### Resume capability
-The scraper uses SQLite (`data.db`) to track progress. If interrupted:
-- Re-run the same command to resume
-- Already crawled URLs will be skipped
-- Progress is saved incrementally
+### Import errors
+If you get import errors, make sure you're running from the project root directory:
+```bash
+cd /path/to/auto_loi_emails
+python -m scrapers.apartments.main ...
+```
 
-## Acceptance Criteria
+## Workflow Example
 
-The implementation satisfies the following requirements:
+Complete workflow to scrape both sources and combine:
 
-1. ✅ **Targets SFR**: Uses `/houses/<city>-<state>` path
-2. ✅ **Extraction Order**: JSON-LD → Selectors → Regex fallbacks
-3. ✅ **Phone Normalization**: 10 or 11 digits (11 if starts with 1)
-4. ✅ **Address Normalization**: Title case, collapse whitespace
-5. ✅ **Deduplication**: Keyed by phone, aggregates addresses
-6. ✅ **Units Calculation**: Count of unique addresses per phone
-7. ✅ **Navigation**: One browser + context, reusable pages
-8. ✅ **Retries**: 3 attempts with 1s, 2s, 4s backoff
-9. ✅ **Pacing**: Delay ± 0.6s jitter between navigations
-10. ✅ **SQLite Persistence**: phones, addresses, crawled_urls tables
-11. ✅ **Resume**: Can re-run without duplicating work
-12. ✅ **CSV Output**: phone, manager_name, addresses, units columns
-13. ✅ **Summary**: Prints unique phones, total addresses, preview
+```bash
+# 1. Scrape Apartments.com
+python -m scrapers.apartments.main \
+  --city "Atlanta" \
+  --state "GA" \
+  --max_pages 40 \
+  --target_phones 200 \
+  --output data/apartments_sfr.csv
+
+# 2. Collect Zillow URLs
+python scrapers/zillow/collect_urls.py \
+  --city "Atlanta" \
+  --state "GA" \
+  --output data/zillow_urls.csv
+
+# 3. Scrape Zillow contact info
+python scrapers/zillow/scrape_from_urls.py \
+  --input data/zillow_urls.csv \
+  --output data/zillow_sfr.csv
+
+# 4. Combine both sources
+python -m src.combine \
+  --apartments data/apartments_sfr.csv \
+  --zillow data/zillow_sfr.csv \
+  --output data/master_sfr.csv
+```
 
 ## License
 
-This project is for educational/research purposes. Use responsibly and in compliance with all applicable laws and Terms of Service.
+This project is for educational/research purposes. Use responsibly and in compliance with all applicable laws and Terms of Service of the websites being scraped.

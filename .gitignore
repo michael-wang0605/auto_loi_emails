@@ -1,13 +1,20 @@
+# Virtual environment
+venv/
+env/
+ENV/
+
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-env/
-venv/
-ENV/
-.venv
+
+# Data files and databases
+data/*.csv
+data/*.db
+*.csv
+*.db
 
 # IDE
 .vscode/
@@ -20,11 +27,13 @@ ENV/
 .DS_Store
 Thumbs.db
 
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+
 # Environment variables
 .env
 .env.local
-
-# Logs
-*.log
-logs/
-

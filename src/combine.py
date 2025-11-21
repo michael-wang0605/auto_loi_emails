@@ -196,20 +196,20 @@ Examples:
     parser.add_argument(
         '--apartments',
         type=str,
-        default='apartments_sfr.csv',
-        help='Path to Apartments.com CSV file (default: apartments_sfr.csv)'
+        default='data/apartments_sfr.csv',
+        help='Path to Apartments.com CSV file (default: data/apartments_sfr.csv)'
     )
     parser.add_argument(
         '--zillow',
         type=str,
-        default='zillow_sfr.csv',
-        help='Path to Zillow CSV file (default: zillow_sfr.csv)'
+        default='data/zillow_sfr.csv',
+        help='Path to Zillow CSV file (default: data/zillow_sfr.csv)'
     )
     parser.add_argument(
         '--output',
         type=str,
-        default='master_sfr.csv',
-        help='Output master CSV file path (default: master_sfr.csv)'
+        default='data/master_sfr.csv',
+        help='Output master CSV file path (default: data/master_sfr.csv)'
     )
     
     args = parser.parse_args()
