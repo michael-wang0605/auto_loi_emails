@@ -45,6 +45,80 @@ auto_loi_emails/
 └── venv/                     # Virtual environment (not in git)
 ```
 
+## Quick Start: Collecting More Data
+
+**For team members continuing this work:** The current data files are included in the repository. To collect more data from both sources, follow these steps:
+
+### Collecting More Data from Apartments.com
+
+1. **Run the Apartments.com scraper** (it will automatically resume from where it left off):
+   ```bash
+   python -m scrapers.apartments.main --city "Atlanta" --state "GA" --max_pages 50 --target_phones 500
+   ```
+
+2. **The scraper will:**
+   - Resume from the last crawled URL (stored in `data/data.db`)
+   - Skip URLs that have already been processed
+   - Continue until it reaches `--target_phones` or `--max_pages`
+   - Save results to `data/apartments_sfr.csv`
+
+3. **To scrape a different city**, just change the city/state:
+   ```bash
+   python -m scrapers.apartments.main --city "Miami" --state "FL" --max_pages 50
+   ```
+
+### Collecting More Data from Zillow
+
+Zillow scraping is a two-step process:
+
+#### Step 1: Collect Property URLs
+
+```bash
+python scrapers/zillow/collect_urls.py --city "Atlanta" --state "GA" --delay 3.0
+```
+
+**This script:**
+- Runs indefinitely until no more pages are available
+- Automatically skips URLs already in `data/zillow_urls.csv`
+- Saves URLs incrementally (so you can stop and resume)
+- Uses human-like scrolling and clicking to avoid bot detection
+
+**To collect URLs for a different city:**
+```bash
+python scrapers/zillow/collect_urls.py --city "Miami" --state "FL" --delay 3.0
+```
+
+#### Step 2: Scrape Contact Info from URLs
+
+Once you have URLs collected, scrape the contact information:
+
+```bash
+python scrapers/zillow/scrape_from_urls.py --input data/zillow_urls.csv --output data/zillow_sfr.csv --delay 3.0
+```
+
+**This script:**
+- Reads URLs from the CSV file
+- Skips URLs already processed (tracked in `data/zillow_data.db`)
+- Extracts phone, address, agent name, and business name
+- Saves results incrementally to the CSV
+
+### Combining Updated Data
+
+After collecting more data from either source, combine everything:
+
+```bash
+python -m src.combine --apartments data/apartments_sfr.csv --zillow data/zillow_sfr.csv --output data/master_sfr.csv
+```
+
+This creates/updates `data/master_sfr.csv` with all data from both sources, including a `source` column indicating where each phone number came from.
+
+### Important Notes
+
+- **Rate Limiting**: Both scrapers include delays to avoid being blocked. If you encounter CAPTCHAs, increase the `--delay` parameter (e.g., `--delay 5.0`)
+- **Resume Capability**: Both scrapers can be stopped and resumed. They track progress in SQLite databases
+- **Data Persistence**: All data is saved incrementally, so you won't lose progress if the script is interrupted
+- **Headless Mode**: By default, browsers run in headless mode. Add `--headless false` to see what's happening
+
 ## Requirements
 
 - Python 3.9+
