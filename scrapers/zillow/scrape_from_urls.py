@@ -29,7 +29,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://www.zillow.com"
-USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+# Use a more recent Chrome user agent
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
 
 def normalize_url(url: str) -> str:
@@ -1082,10 +1083,15 @@ def scrape_from_urls(input_csv: str, output_csv: str, delay: float, headless: bo
             logger.info(f"Resuming: Found {existing_phones} phones in database")
         
         with sync_playwright() as p:
+            # Use installed Chrome instead of Chromium for better anti-bot evasion
             browser = p.chromium.launch(
                 headless=headless,
+                channel="chrome",  # Use installed Chrome browser instead of bundled Chromium
                 args=[
                     '--disable-blink-features=AutomationControlled',
+                    '--disable-dev-shm-usage',
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
                 ]
             )
             
@@ -1094,11 +1100,78 @@ def scrape_from_urls(input_csv: str, output_csv: str, delay: float, headless: bo
                 viewport={'width': 1920, 'height': 1080},
                 locale='en-US',
                 timezone_id='America/New_York',
+                permissions=['geolocation'],
+                geolocation={'latitude': 33.7490, 'longitude': -84.3880},  # Atlanta coordinates
+                color_scheme='light',
             )
             
+            # Add comprehensive stealth scripts to avoid detection
             context.add_init_script("""
+                // Remove webdriver property
                 Object.defineProperty(navigator, 'webdriver', {
                     get: () => undefined
+                });
+                
+                // Override plugins to look like real Chrome
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => {
+                        const plugins = [];
+                        for (let i = 0; i < 5; i++) {
+                            plugins.push({
+                                0: {type: 'application/x-google-chrome-pdf', suffixes: 'pdf', description: 'Portable Document Format'},
+                                description: 'Portable Document Format',
+                                filename: 'internal-pdf-viewer',
+                                length: 1,
+                                name: 'Chrome PDF Plugin'
+                            });
+                        }
+                        return plugins;
+                    }
+                });
+                
+                // Override languages
+                Object.defineProperty(navigator, 'languages', {
+                    get: () => ['en-US', 'en']
+                });
+                
+                // Chrome runtime (make it look like real Chrome)
+                window.chrome = {
+                    runtime: {},
+                    loadTimes: function() {},
+                    csi: function() {},
+                    app: {}
+                };
+                
+                // Override permissions API
+                const originalQuery = window.navigator.permissions.query;
+                window.navigator.permissions.query = (parameters) => (
+                    parameters.name === 'notifications' ?
+                        Promise.resolve({ state: Notification.permission }) :
+                        originalQuery(parameters)
+                );
+                
+                // Override getBattery to return realistic values
+                if (navigator.getBattery) {
+                    navigator.getBattery = () => Promise.resolve({
+                        charging: true,
+                        chargingTime: 0,
+                        dischargingTime: Infinity,
+                        level: 1
+                    });
+                }
+                
+                // Override platform
+                Object.defineProperty(navigator, 'platform', {
+                    get: () => 'Win32'
+                });
+                
+                // Add missing properties that real Chrome has
+                Object.defineProperty(navigator, 'hardwareConcurrency', {
+                    get: () => 8
+                });
+                
+                Object.defineProperty(navigator, 'deviceMemory', {
+                    get: () => 8
                 });
             """)
             

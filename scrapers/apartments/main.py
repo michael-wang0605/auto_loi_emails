@@ -46,9 +46,12 @@ def export_to_csv(store: Store, output_path: str):
         # Join addresses with semicolon, deterministic order (sorted)
         addresses_str = '; '.join(sorted(data['addresses'])) if data['addresses'] else ''
         
+        # Use agent_name (fallback to manager_name for old data)
+        manager_name = data.get('agent_name') or data.get('manager_name') or ''
+        
         records.append({
             'phone': data['phone'],
-            'manager_name': data['manager_name'] or '',
+            'manager_name': manager_name,
             'addresses': addresses_str,
             'units': data['units']
         })

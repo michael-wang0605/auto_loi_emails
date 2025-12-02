@@ -20,27 +20,38 @@ BASE_URL = "https://www.apartments.com"
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 
-def retry_goto(page: Page, url: str, max_retries: int = 3) -> bool:
+def retry_goto(page: Page, url: str, max_retries: int = 5) -> bool:
     """
-    Retry page.goto() with incremental backoff (1s, 2s, 4s).
+    Retry page.goto() with incremental backoff (2s, 4s, 8s, 16s).
     Returns True if successful, False if all retries failed.
     """
-    backoff_delays = [1, 2, 4]
+    backoff_delays = [2, 4, 8, 16]
     
     for attempt in range(max_retries):
         try:
-            # Try load first (more reliable than domcontentloaded), fallback to domcontentloaded
-            wait_strategies = ["load", "domcontentloaded"]
+            # Try networkidle first (most reliable), then load, then domcontentloaded
+            wait_strategies = ["networkidle", "load", "domcontentloaded"]
             last_error = None
             
             for wait_strategy in wait_strategies:
                 try:
-                    page.goto(url, wait_until=wait_strategy, timeout=90000)
+                    # Add longer timeout for HTTP2 issues
+                    page.goto(url, wait_until=wait_strategy, timeout=120000)
                     # Wait a bit more for any dynamic content
-                    page.wait_for_timeout(2000)
+                    page.wait_for_timeout(3000)
                     return True
                 except Exception as e:
                     last_error = e
+                    error_str = str(e).lower()
+                    # If it's an HTTP2 error, try with networkidle disabled
+                    if 'http2' in error_str or 'protocol' in error_str:
+                        try:
+                            # Try with commit wait strategy (less strict)
+                            page.goto(url, wait_until='commit', timeout=120000)
+                            page.wait_for_timeout(5000)  # Longer wait for content
+                            return True
+                        except Exception:
+                            pass
                     if wait_strategy == wait_strategies[-1]:
                         # Last strategy failed, raise the error
                         raise
@@ -810,9 +821,12 @@ def export_to_csv_incremental(store: Store, output_path: str):
         # Join addresses with semicolon, deterministic order (sorted)
         addresses_str = '; '.join(sorted(data['addresses'])) if data['addresses'] else ''
         
+        # Use agent_name (fallback to manager_name for old data)
+        manager_name = data.get('agent_name') or data.get('manager_name') or ''
+        
         records.append({
             'phone': data['phone'],
-            'manager_name': data['manager_name'] or '',
+            'manager_name': manager_name,
             'addresses': addresses_str,
             'units': data['units']
         })
@@ -863,8 +877,14 @@ def scrape_city(
             browser_options['proxy'] = {'server': proxy}
         
         # Launch one browser instance for the entire run
-        browser = p.chromium.launch(**browser_options)
-        logger.info("Chromium browser launched")
+        # Use Chrome instead of Chromium for better compatibility (like Zillow scraper)
+        try:
+            browser = p.chromium.launch(channel="chrome", headless=headless, args=browser_options['args'])
+            logger.info("Chrome browser launched")
+        except Exception:
+            # Fallback to Chromium if Chrome not available
+            browser = p.chromium.launch(**browser_options)
+            logger.info("Chromium browser launched")
         
         # Create one context for the entire run with enhanced headers
         context = browser.new_context(
@@ -879,7 +899,7 @@ def scrape_city(
             extra_http_headers={
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.9',
-                'Accept-Encoding': 'gzip, deflate, br',
+                'Accept-Encoding': 'gzip, deflate',  # Removed 'br' (Brotli) which requires HTTP/2
                 'Connection': 'keep-alive',
                 'Upgrade-Insecure-Requests': '1',
                 'Sec-Fetch-Dest': 'document',
